@@ -26,7 +26,7 @@ app.get("/", (req, res) => {
 
 // 1) GET /auth → redirige a GitHub
 app.get("/auth", (req, res) => {
-  const redirectUri = `${req.protocol}://${req.get("host")}/callback`;
+  const redirectUri = "https://auth-server-492.onrender.com/callback";
   const url = `https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${redirectUri}&scope=repo,user`;
   res.redirect(url);
 });
