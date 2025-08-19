@@ -10,14 +10,14 @@ const CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const BASE_URL = process.env.BASE_URL || "https://auth-server-492.onrender.com";
 
-// Ruta para iniciar el login con GitHub
+// Paso 1: Redirige a GitHub para login
 app.get("/auth", (req, res) => {
   const redirectUri = `${BASE_URL}/callback`;
   const url = `https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&scope=repo,user&redirect_uri=${redirectUri}`;
   res.redirect(url);
 });
 
-// Callback de GitHub después del login
+// Paso 2: GitHub devuelve "code", pedimos token y respondemos JSON
 app.get("/callback", async (req, res) => {
   const code = req.query.code;
   try {
@@ -35,14 +35,17 @@ app.get("/callback", async (req, res) => {
     const accessToken = data.access_token;
 
     if (!accessToken) {
-      return res.status(400).send("❌ Error obteniendo token de GitHub.");
+      return res.status(400).json({ error: "No se pudo obtener token de GitHub" });
     }
 
-    // 🔑 Redirige de vuelta al CMS con el token en la URL
-    res.redirect(`https://sitio-web-innovacion.netlify.app/admin/#access_token=${accessToken}`);
+    // 👇 Decap CMS espera esta respuesta JSON
+    res.json({
+      token: accessToken,
+      provider: "github"
+    });
   } catch (err) {
     console.error("Error en callback:", err);
-    res.status(500).send("❌ Error en el servidor de autenticación.");
+    res.status(500).json({ error: "Error en el servidor de autenticación" });
   }
 });
 
