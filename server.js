@@ -6,24 +6,40 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
+// ============ ENV VARS (en Render > Environment) ============
+// GITHUB_CLIENT_ID        -> de tu OAuth App en GitHub
+// GITHUB_CLIENT_SECRET    -> de tu OAuth App en GitHub
+// BASE_URL                -> https://auth-server-492.onrender.com   (SIN slash final)
+// SITE_URL                -> https://sitio-web-innovacion.netlify.app (SIN slash final)
+
 const CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-const BASE_URL = process.env.BASE_URL || "https://auth-server-492.onrender.com";
-// 👇 tu sitio donde vive /admin (Decap)
-const SITE_URL = process.env.SITE_URL || "https://sitio-web-innovacion.netlify.app";
+const BASE_URL = (process.env.BASE_URL || "").replace(/\/$/, "");
+const SITE_URL = (process.env.SITE_URL || "").replace(/\/$/, "");
 
-// Inicia el flujo OAuth en GitHub
+// ----------- 1) Iniciar login con GitHub -----------
 app.get("/auth", (req, res) => {
+  if (!CLIENT_ID || !CLIENT_SECRET || !BASE_URL || !SITE_URL) {
+    return res
+      .status(500)
+      .send("Missing env vars: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, BASE_URL, SITE_URL");
+  }
+
   const redirectUri = `${BASE_URL}/callback`;
   const url =
     `https://github.com/login/oauth/authorize` +
-    `?client_id=${CLIENT_ID}&scope=repo,user&redirect_uri=${encodeURIComponent(redirectUri)}`;
+    `?client_id=${encodeURIComponent(CLIENT_ID)}` +
+    `&scope=${encodeURIComponent("repo,user")}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}`;
+
   res.redirect(url);
 });
 
-// GitHub redirige aquí con ?code=...
+// ----------- 2) GitHub vuelve con ?code=... -----------
 app.get("/callback", async (req, res) => {
   const code = req.query.code;
+  const origin = SITE_URL ? new URL(SITE_URL).origin : "*";
+
   try {
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -43,37 +59,51 @@ app.get("/callback", async (req, res) => {
       return res
         .status(400)
         .send(`<script>
-          window.opener && window.opener.postMessage('authorization:github:error:${err}', '${SITE_URL}');
-          window.close();
+          if (window.opener) {
+            window.opener.postMessage('authorization:github:error:${err}', '${origin}');
+            window.opener.postMessage('authorization:github:error:${err}', '*'); // fallback
+            window.close();
+          } else {
+            document.write('❌ Error de login: ${err}');
+          }
         </script>`);
     }
 
-    // ✨ Esta es la clave: mandar el token a la ventana que abrió el popup
+    // 📣 Enviamos el token a la ventana que abrió el popup y cerramos
     res.send(`<script>
       (function() {
-        // Enviar el token al opener (la página /admin)
-        if (window.opener) {
-          window.opener.postMessage('authorization:github:success:${accessToken}', '${SITE_URL}');
-          window.close();
-        } else {
-          // Fallback: mostrar el token si no hay opener
-          document.write('Login ok. Puedes cerrar esta ventana.');
+        try {
+          if (window.opener) {
+            window.opener.postMessage('authorization:github:success:${accessToken}', '${origin}');
+            window.opener.postMessage('authorization:github:success:${accessToken}', '*'); // fallback
+            window.close();
+          } else {
+            document.write('✅ Login ok. Cierra esta ventana y vuelve al CMS.');
+          }
+        } catch (e) {
+          document.write('⚠️ No se pudo entregar el token al CMS. ' + e);
         }
       })();
     </script>`);
   } catch (e) {
     console.error("OAuth callback error:", e);
-    res
+    return res
       .status(500)
       .send(`<script>
-        window.opener && window.opener.postMessage('authorization:github:error:server', '${SITE_URL}');
-        window.close();
+        if (window.opener) {
+          window.opener.postMessage('authorization:github:error:server', '${origin}');
+          window.opener.postMessage('authorization:github:error:server', '*');
+          window.close();
+        } else {
+          document.write('❌ Error en el servidor de autenticación.');
+        }
       </script>`);
   }
 });
 
-// Salud
+// ----------- 3) Salud / Ping -----------
 app.get("/", (_req, res) => res.send("✅ Auth Server Decap listo."));
+app.get("/health", (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Auth server en puerto ${PORT}`));
