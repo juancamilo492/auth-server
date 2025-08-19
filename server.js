@@ -6,40 +6,37 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
-// ============ ENV VARS (en Render > Environment) ============
-// GITHUB_CLIENT_ID        -> de tu OAuth App en GitHub
-// GITHUB_CLIENT_SECRET    -> de tu OAuth App en GitHub
-// BASE_URL                -> https://auth-server-492.onrender.com   (SIN slash final)
-// SITE_URL                -> https://sitio-web-innovacion.netlify.app (SIN slash final)
+// ENV en Render (sin slash final):
+// GITHUB_CLIENT_ID
+// GITHUB_CLIENT_SECRET
+// BASE_URL  = https://auth-server-492.onrender.com
+// SITE_URL  = https://sitio-web-innovacion.netlify.app
 
 const CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const BASE_URL = (process.env.BASE_URL || "").replace(/\/$/, "");
 const SITE_URL = (process.env.SITE_URL || "").replace(/\/$/, "");
+const ORIGIN = SITE_URL ? new URL(SITE_URL).origin : "*";
 
-// ----------- 1) Iniciar login con GitHub -----------
-app.get("/auth", (req, res) => {
+// 1) Iniciar login con GitHub
+app.get("/auth", (_req, res) => {
   if (!CLIENT_ID || !CLIENT_SECRET || !BASE_URL || !SITE_URL) {
-    return res
-      .status(500)
-      .send("Missing env vars: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, BASE_URL, SITE_URL");
+    return res.status(500).send(
+      "Missing env vars: GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, BASE_URL, SITE_URL"
+    );
   }
-
   const redirectUri = `${BASE_URL}/callback`;
   const url =
     `https://github.com/login/oauth/authorize` +
     `?client_id=${encodeURIComponent(CLIENT_ID)}` +
     `&scope=${encodeURIComponent("repo,user")}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}`;
-
   res.redirect(url);
 });
 
-// ----------- 2) GitHub vuelve con ?code=... -----------
+// 2) GitHub -> /callback?code=...
 app.get("/callback", async (req, res) => {
   const code = req.query.code;
-  const origin = SITE_URL ? new URL(SITE_URL).origin : "*";
-
   try {
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -50,60 +47,57 @@ app.get("/callback", async (req, res) => {
         code,
       }),
     });
-
     const data = await tokenRes.json();
     const accessToken = data.access_token;
 
-    if (!accessToken) {
-      const err = (data && (data.error_description || data.error)) || "No token";
-      return res
-        .status(400)
-        .send(`<script>
-          if (window.opener) {
-            window.opener.postMessage('authorization:github:error:${err}', '${origin}');
-            window.opener.postMessage('authorization:github:error:${err}', '*'); // fallback
-            window.close();
-          } else {
-            document.write('❌ Error de login: ${err}');
-          }
-        </script>`);
-    }
-
-    // 📣 Enviamos el token a la ventana que abrió el popup y cerramos
-    res.send(`<script>
-      (function() {
+    const send = (payloadJS) => `<!doctype html><html><body><script>
+      (function(){
         try {
           if (window.opener) {
-            window.opener.postMessage('authorization:github:success:${accessToken}', '${origin}');
-            window.opener.postMessage('authorization:github:success:${accessToken}', '*'); // fallback
-            window.close();
+            ${payloadJS}
+            // Enviar dos veces por si la primera llega antes de que el listener esté listo
+            setTimeout(function(){ ${payloadJS} }, 150);
+            // y una tercera por si acaso
+            setTimeout(function(){ ${payloadJS} }, 400);
+            // cerrar con un pequeño delay
+            setTimeout(function(){ window.close(); }, 700);
           } else {
-            document.write('✅ Login ok. Cierra esta ventana y vuelve al CMS.');
+            document.write('Login completado. Puedes cerrar esta ventana y volver al CMS.');
           }
-        } catch (e) {
-          document.write('⚠️ No se pudo entregar el token al CMS. ' + e);
+        } catch(e) {
+          document.write('No se pudo entregar el token al CMS: ' + e);
         }
       })();
-    </script>`);
+    </script></body></html>`;
+
+    if (!accessToken) {
+      const err = (data && (data.error_description || data.error)) || "No token";
+      const js = `
+        window.opener.postMessage('authorization:github:error:${err}', '${ORIGIN}');
+        window.opener.postMessage('authorization:github:error:${err}', '*');
+      `;
+      return res.status(400).send(send(js));
+    }
+
+    // Mensaje en el formato que Decap escucha:
+    // "authorization:github:success:<TOKEN>"
+    const js = `
+      window.opener.postMessage('authorization:github:success:${accessToken}', '${ORIGIN}');
+      window.opener.postMessage('authorization:github:success:${accessToken}', '*');
+    `;
+    return res.send(send(js));
   } catch (e) {
-    console.error("OAuth callback error:", e);
-    return res
-      .status(500)
-      .send(`<script>
-        if (window.opener) {
-          window.opener.postMessage('authorization:github:error:server', '${origin}');
-          window.opener.postMessage('authorization:github:error:server', '*');
-          window.close();
-        } else {
-          document.write('❌ Error en el servidor de autenticación.');
-        }
-      </script>`);
+    const js = `
+      window.opener.postMessage('authorization:github:error:server', '${ORIGIN}');
+      window.opener.postMessage('authorization:github:error:server', '*');
+    `;
+    return res.status(500).send(send(js));
   }
 });
 
-// ----------- 3) Salud / Ping -----------
-app.get("/", (_req, res) => res.send("✅ Auth Server Decap listo."));
+// Salud
+app.get("/", (_req, res) => res.send("✅ Auth Server Decap listo"));
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Auth server en puerto ${PORT}`));
+app.listen(PORT, () => console.log("Auth server en puerto " + PORT));
