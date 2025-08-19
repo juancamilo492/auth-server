@@ -15,16 +15,58 @@ const CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
 const SITE_URL = process.env.SITE_URL; // ej: https://sitio-web-innovacion.netlify.app
 
 if (!CLIENT_ID || !CLIENT_SECRET || !SITE_URL) {
-  console.error("❌ ERROR: faltan variables de entorno en Render.");
+  console.error("❌ ERROR: faltan variables de entorno");
   process.exit(1);
 }
 
-// Ruta raíz para probar que corre
+// Ruta de prueba
 app.get("/", (req, res) => {
-  res.send("✅ Auth server corriendo correctamente");
+  res.send("✅ Auth server corriendo");
 });
 
-// Endpoint de autenticación con GitHub
+// 1) GET /auth → redirige a GitHub
+app.get("/auth", (req, res) => {
+  const redirectUri = `${req.protocol}://${req.get("host")}/callback`;
+  const url = `https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${redirectUri}&scope=repo,user`;
+  res.redirect(url);
+});
+
+// 2) GET /callback → GitHub devuelve el code
+app.get("/callback", async (req, res) => {
+  const code = req.query.code;
+  if (!code) {
+    return res.status(400).send("❌ Falta el código de autorización");
+  }
+
+  try {
+    const response = await fetch(`https://github.com/login/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        code,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (data.error) {
+      return res.status(400).json(data);
+    }
+
+    // Decap espera que redirijas al SITE_URL/admin con el token en el hash
+    res.redirect(`${SITE_URL}/admin/#access_token=${data.access_token}`);
+  } catch (err) {
+    console.error("❌ Error en /callback:", err);
+    res.status(500).send("Error interno en callback");
+  }
+});
+
+// 3) POST /auth → usado por Decap directamente
 app.post("/auth", async (req, res) => {
   const { code } = req.body;
 
@@ -33,44 +75,36 @@ app.post("/auth", async (req, res) => {
   }
 
   try {
-    // Intercambiar el código por un access token en GitHub
-    const response = await fetch(
-      `https://github.com/login/oauth/access_token`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          client_id: CLIENT_ID,
-          client_secret: CLIENT_SECRET,
-          code,
-        }),
-      }
-    );
+    const response = await fetch(`https://github.com/login/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        code,
+      }),
+    });
 
     const data = await response.json();
 
     if (data.error) {
-      console.error("❌ Error al obtener token:", data.error);
       return res.status(400).json(data);
     }
 
-    const token = data.access_token;
-
-    // Responder al frontend (Decap CMS)
     res.json({
-      token,
+      token: data.access_token,
       provider: "github",
     });
   } catch (err) {
-    console.error("❌ Error en /auth:", err);
-    res.status(500).json({ error: "Error interno en el servidor" });
+    console.error("❌ Error en POST /auth:", err);
+    res.status(500).json({ error: "Error interno" });
   }
 });
 
-// Servidor escuchando
+// Servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Auth server corriendo en puerto ${PORT}`);
+  console.log(`🚀 Auth server escuchando en puerto ${PORT}`);
 });
